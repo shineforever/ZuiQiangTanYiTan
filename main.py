@@ -1,55 +1,44 @@
 DEBUG = False
-
-
 import cv2
 import os
-import shutil
-import os
 import numpy as np
-
 import time
 import matplotlib.pyplot as plt
 import shutil
 import random
-
 from math import sqrt,cos,sin,asin
-pi = 3.1415926
-
+pi = 3.1415926#圆周率
 work_path = os.getcwd()
 order_start = work_path + '/file/adb.exe '
-
 fix_ky,fix_kx = 1,1
 
+
+
+
+#####
+Max_step = 1000#每轮最大迭代数，避免死循环
+# obj_color_list = [(55,89,106)]
+
+v0_mh = 10#小球初始速度(像素/帧）
+dt = 1.0
+g = 0.1345#重力加速度
+
+r = 10#小球半径
+
+wall_l_k = 0.95#墙壁弹性系数
+obj_l_k = 0.87#物体弹性系数
 
 def my_int(num):
     return int(round(num))
 
-#####
-c_sen =200#识别物体迟钝度
-
-obj_color_list = [(55,89,106)]
-shoot_p = (360,195)
-ps_start_y = 260
-R = 360
+shoot_p = (360,195)#发射位置
+ps_start_y = 260#物块最高能到达的位置
+R = 360#半屏宽
 s_cita = asin((ps_start_y-shoot_p[1])/R)
-Tap_ps = []
-N = 30
-
-v0_mh = 10
-dt = 1.0
-g = 0.1345
-
-r = 15#小球半径
-
-# lost_k = 0.95
-wall_l_k = 0.945
-obj_l_k = 0.87
-# lost_k = 0.774945995331922933
-
-
+N = 30#遍历发射角度的数量（精度）
+Tap_ps = []#遍历发射按压点
 for k in range(0, N):
     d_ct = (pi-2*s_cita)/N
-
     cita = k*d_ct+s_cita
     x = my_int(R*cos(cita))+shoot_p[0]
     y = my_int(R*sin(cita))+shoot_p[1]
@@ -76,6 +65,13 @@ def _run(imgfile_name):
         img_rgb = _read_screenshot(imgfile_name)
         output_rgb = np.copy(img_rgb)
 
+        if _not_in_game(img_rgb):
+            _log("脱离游戏" , "EVENT")
+            _tap()
+            _tap((360,1050))
+            time.sleep(3)
+            continue
+
         best_tap_point = _get_BTP(img_rgb,output_rgb)
         _save_outputimg(output_rgb)
         if DEBUG:
@@ -84,7 +80,13 @@ def _run(imgfile_name):
 
         time.sleep(5)
 
+def _not_in_game(img_rgb):
+    # t = tuple(img_rgb[1][1])
 
+    if tuple(img_rgb[1][1]) == (53,51,46):
+        return False
+    else:
+        return True
 
 
 
@@ -106,15 +108,16 @@ def _init_log():  # 在log中加标记以便与历史纪录区分
         f.write(log_con)
 
 
-def _log(log_con, type_name, is_print=True):
+def _log(log_con, type_name, is_print=True, is_save = False):
     if is_print:
         print(log_con)
 
-    with open("log/Logs.log", "a", encoding="utf-8") as f:
-        f.write(log_con)
+    if is_save:
+        with open("log/Logs.log", "a", encoding="utf-8") as f:
+            f.write(log_con)
 
-    with open("log/%s.log" % type_name, "a", encoding="utf-8") as f:
-        f.write(log_con)
+        with open("log/%s.log" % type_name, "a", encoding="utf-8") as f:
+            f.write(log_con)
 
 
 def _get_screenshot(name):
@@ -228,18 +231,25 @@ def _get_BTP(img_rgb,output_rgb):
 
     best_score = 0
     best_tap_point = None
+    _log("正在计算...","EVENT")
+    i = 0
     for p in Tap_ps:
+        i += 1
+        print("%f%%" % (i*100/N),end=" ")
         score = _judge_tap_point(img_rgb,p,output_rgb)
         if score>=best_score:
             best_tap_point = p
             best_score = score
-
+    print()
     cv2.circle(output_rgb, best_tap_point, BTP_r, BTP_color, -1)
 
     best_output_rgb = np.copy(img_rgb)
+
     _judge_tap_point(img_rgb, best_tap_point, best_output_rgb)
     cv2.circle(best_output_rgb, best_tap_point, BTP_r, BTP_color, -1)
     _save_outputimg(best_output_rgb,"best_output")
+
+    _log("发现最优点击坐标%d,%d"%best_tap_point,"EVENT")
 
     return best_tap_point
 
@@ -257,40 +267,43 @@ def _int_pos(pos):
     return (my_int(pos[0]),my_int(pos[1]))
 
 def _judge_tap_point(img_rgb,p,output_rgb):
-
-
-
     cur_pos = shoot_p
     v0 = _get_v0(p)
     v = v0
-
     score = 0
     i = 0
     x = r/(v0_mh*dt)
     while True:
-
         ds = (v[0]*dt,v[1]*dt)
         cur_pos = (cur_pos[0]+ds[0],cur_pos[1]+ds[1])
-        if _is_out(cur_pos):
+        if _is_out(cur_pos) or i > Max_step:
             break
 
         cv2.circle(output_rgb, _int_pos(cur_pos), curP_r, curP_color, -1)
-
         dv = (0,g*dt)
         v = (v[0]+dv[0],v[1]+dv[1])
 
-
         if i > x:
-            v,flag = _pengzhuang(img_rgb,cur_pos,v,output_rgb)
+            v,flag,mean_e = _pengzhuang(img_rgb,cur_pos,v,output_rgb)
         else:
             flag = 0
 
-        score += flag
+        if score<flag:
+            if DEBUG:
+                print("score:",score,"flag:",flag,"tap_p:",p,"mean_e:",mean_e)
+            score = flag
 
-        if _v2v_mh(v) <0.2:
-            v = _v_mh2v(10,v)
+        # score += flag
+
+        # if _v2v_mh(v) <0.2:
+        #     v = _v_mh2v(10,v)
 
         i += 1
+
+    if DEBUG:
+        print(i,end="\t")
+
+
 
 
 
@@ -309,15 +322,9 @@ def _pengzhuang(img_rgb,cur_pos,v,output_rgb):
     t_sum_e = (0,0)
     t_e_n = 0
 
-    # if cur_pos[1]<ps_start_y:
-    #     return v,flag
-
     for c_e_dps in Circle_E_dps:
         c_e = (c_e_dps[0]+cur_pos[0],c_e_dps[1]+cur_pos[1])
         cv2.circle(output_rgb, _int_pos(c_e), pengzhuang_r, pengzhuang_color, -1)
-        # cur_color = img_rgb[my_int(c_e[0]),my_int(c_e[1])]
-        # if c_e[0]>=720:
-        #     print(c_e_dps,cur_pos)
 
         if _is_Edge(img_rgb,c_e):
             e = c_e
@@ -325,15 +332,17 @@ def _pengzhuang(img_rgb,cur_pos,v,output_rgb):
             cv2.circle(output_rgb, _int_pos(e), ep_r, ep_color, -1)
             t_sum_e = (t_sum_e[0]+e[0],t_sum_e[1]+e[1])
             t_e_n += 1
-
-
+    mean_e = (-1,-1)
     if(t_e_n):
 
         mean_e = (t_sum_e[0]/t_e_n,t_sum_e[1]/t_e_n)
 
-        flag = 1280-mean_e[1]
+        #!!!
+
+        flag = 1000/(mean_e[1]-280)
+
         lost_k = obj_l_k
-        if mean_e[0] >=661 or mean_e[0] <= 55:
+        if mean_e[0] >=660 or mean_e[0] <= 55 or mean_e[1] < ps_start_y:
             lost_k = wall_l_k
             flag = 0
         cv2.circle(output_rgb, _int_pos(mean_e), e_mean_r, e_mean_color, -1)
@@ -342,7 +351,7 @@ def _pengzhuang(img_rgb,cur_pos,v,output_rgb):
         v = _cal_pengzhuang_v(s,v,lost_k)
 
 
-    return v,flag
+    return v,flag,mean_e
 
 def _v2v_mh(v):
     return sqrt(v[0]*v[0]+v[1]*v[1])
@@ -365,8 +374,6 @@ def _cal_pengzhuang_v(s,v,lost_k):
     temp2 = float(s[0]*s[0] + s[1]*s[1])
     if(temp2 and temp1>0):### ###一次是穿模顺向问题，一次是双重碰撞问题
         new_v = ((v[0] - lost_k*s[0]*2*temp1/temp2),(v[1] - lost_k*s[1]*2*temp1/temp2))
-        if DEBUG:
-            print(new_v)
     else:
         new_v = v
     return new_v
@@ -377,10 +384,11 @@ def _get_v0(p):
     p_mh = (p[0]-shoot_p[0],p[1]-shoot_p[1])
     return _v_mh2v(v0_mh,p_mh)
 
-def _tap(tap_point = (360,1050)):
+def _tap(tap_point = (360,1122)):
 
     cmd_str = order_start + 'shell input tap %d %d' % (my_int(tap_point[0]*fix_kx),my_int(tap_point[1]*fix_ky))
     _cmd(cmd_str)
+    _log("点击坐标%d,%d"%tap_point, "EVENT")
 
 def _is_begin():
     return False
